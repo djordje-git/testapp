@@ -1,10 +1,10 @@
 name: Lint, Test, Security Checks, and Versioning
 
-on:
-  push:
-    branches:
-     # - dev
-     # - main (zatarabljeno dok se ne sredi ceo fajl)
+#(zatarabljeno dok se ne sredi ceo fajl)
+# on:
+#   push:
+#     branches:
+#       - main 
 
 permissions:
   contents: write
