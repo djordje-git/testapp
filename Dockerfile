@@ -3,6 +3,8 @@ FROM node:18-alpine AS builder
 WORKDIR /usr/src/app
 COPY package*.json ./
 RUN npm install --only=production
+# Install NestJS CLI globally
+RUN npm install -g @nestjs/cli
 COPY . .
 RUN npm run build
 
