@@ -1,0 +1,344 @@
+name: Lint, Test, Security Checks, and Versioning
+
+on:
+  push:
+    branches:
+     # - dev
+     # - main (zatarabljeno dok se ne sredi ceo fajl)
+
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
+jobs:
+  hadolint:
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.hadolint_outcome.outputs.result }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Lint Dockerfile
+        id: hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          failure-threshold: error
+          format: json
+
+      - name: Save Hadolint output
+        id: save_hadolint_output
+        if: always()
+        run: echo "$HADOLINT_RESULTS" | jq '.' > hadolint_output.json
+
+      - name: Print Dockerfile lint output
+        run: |
+          echo "-----HADOLINT RESULT-----"
+          echo "Outcome: ${{ steps.hadolint.outcome }}"
+          echo "-----DETAILS--------"
+          cat hadolint_output.json
+          echo "--------------------"
+
+      - name: Upload Hadolint output
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: hadolint_output
+          path: hadolint_output.json
+
+      - name: Set Hadolint result
+        id: hadolint_outcome
+        run: set -x && echo "result=${{ steps.hadolint.outcome }}" >> "$GITHUB_OUTPUT"
+
+  code_lint:
+    runs-on: ubuntu-latest
+    needs: hadolint
+    outputs:
+      code_lint_result: ${{ steps.code_lint_outcome.outputs.code_lint_result }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Download Hadolint output
+        uses: actions/download-artifact@v3
+        with:
+          name: hadolint_output
+
+      - name: Code lint
+        id: code_lint
+        run: |
+          npm i
+          set -o pipefail
+          npm run lint 2>&1 | tee code_lint_output.txt
+
+      - name: Upload Code Lint output
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: code_lint_output
+          path: code_lint_output.txt
+
+      - name: Set Code Lint result
+        id: code_lint_outcome
+        run: echo "code_lint_result=${{ steps.code_lint.outcome }}" >> "$GITHUB_OUTPUT"
+
+  unit_tests:
+    runs-on: ubuntu-latest
+    needs: code_lint
+    outputs:
+      unit_test_result: ${{ steps.unit_tests_outcome.outputs.unit_test_result }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Download Code Lint output
+        uses: actions/download-artifact@v3
+        with:
+          name: code_lint_output
+
+      - name: Unit tests
+        id: unit_tests
+        run: |
+          npm i
+          set -o pipefail
+          npm run test 2>&1 | tee unit_test_output.txt
+
+      - name: Upload Unit Test output
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: unit_test_output
+          path: unit_test_output.txt
+
+      - name: Set Unit Test result
+        id: unit_tests_outcome
+        run: echo "unit_test_result=${{ steps.unit_tests.outcome }}" >> "$GITHUB_OUTPUT"
+
+  build:
+    runs-on: ubuntu-latest
+    needs: unit_tests
+    outputs:
+      build_result: ${{ steps.build_outcome.outputs.build_result }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Download Unit Test output
+        uses: actions/download-artifact@v3
+        with:
+          name: unit_test_output
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Build Docker image
+        id: build_image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          tags: ghcr.io/${{ github.repository }}:latest
+          load: true
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache
+
+      - name: Save Docker image
+        run: docker save ghcr.io/${{ github.repository }}:latest -o my-image.tar
+
+      - name: Upload Docker image
+        uses: actions/upload-artifact@v3
+        with:
+          name: docker_image
+          path: my-image.tar
+
+      - name: Set Build result
+        id: build_outcome
+        run: echo "build_result=${{ steps.build_image.outcome }}" >> "$GITHUB_OUTPUT"
+
+  dockle_scan:
+    runs-on: ubuntu-latest
+    needs: build
+    outputs:
+      dockle_result: ${{ steps.dockle_outcome.outputs.dockle_result }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v3
+        with:
+          name: docker_image
+
+      - name: Load Docker image
+        run: docker load -i my-image.tar
+
+      - name: Scan Docker image with Dockle
+        id: dockle
+        uses: goodwithtech/dockle-action@main
+        with:
+          image: ghcr.io/${{ github.repository }}:latest
+          format: 'json'
+          exit-level: 'fatal'
+          ignore: 'CIS-DI-0010'
+          output: dockle_scan_output.json
+
+      - name: Upload Dockle output
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: dockle_scan_output
+          path: dockle_scan_output.json
+
+      - name: Set Dockle result
+        id: dockle_outcome
+        run: echo "dockle_result=${{ steps.dockle.outcome }}" >> "$GITHUB_OUTPUT"
+
+  semantic_release:
+    runs-on: ubuntu-latest
+    needs: dockle_scan
+    outputs:
+      release_version: ${{ steps.semantic_release.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Ensure full history for semantic-release
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      
+      - name: Install dependencies
+        run: |
+            npm install -g semantic-release @semantic-release/commit-analyzer \
+            @semantic-release/release-notes-generator \
+            @semantic-release/changelog \
+            @semantic-release/git
+
+      - name: Add release config
+        run: |
+            echo '{
+                "branches": [
+                "main",
+                "master",
+                {
+                    "name": "dev",
+                    "prerelease": "rc"
+                }
+                ],
+                "plugins": [
+                "@semantic-release/commit-analyzer",
+                [
+                    "@semantic-release/changelog",
+                    {
+                    "changelogFile": "CHANGELOG.md"
+                    }
+                ],
+                [
+                    "@semantic-release/release-notes-generator",
+                    {
+                    "preset": "angular",
+                    "parserOpts": {
+                        "noteKeywords": ["BREAKING CHANGE", "BREAKING CHANGES", "BREAKING"]
+                    },
+                    "writerOpts": {
+                        "commitsSort": ["subject", "scope"]
+                    }
+                    }
+                ],
+                [
+                    "@semantic-release/git",
+                    {
+                    "assets": ["CHANGELOG.md"],
+                    "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+                    }
+                ]
+                ]
+            }' > .releaserc.json
+        
+
+      - name: Run semantic-release
+        id: semantic_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          export output=$(npx semantic-release --ci)
+          echo $output | tee semantic_release_output.txt
+          version=v$(echo $output | grep -oP 'The next release version is \K[0-9]+\.[0-9]+\.[0-9]+' semantic_release_output.txt)
+          echo "version=${version}" >> $GITHUB_OUTPUT
+          echo "$version"
+
+  push_image:
+    runs-on: ubuntu-latest
+    needs:
+      - semantic_release
+      - dockle_scan
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v3
+        with:
+          name: docker_image
+
+      - name: Login to GHCR
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and Push Docker image to GHCR
+        run: |
+          docker load -i my-image.tar
+          version=${{ needs.semantic_release.outputs.release_version }}
+          docker tag ghcr.io/${{ github.repository }}:latest ghcr.io/${{ github.repository }}:${version}
+          docker push ghcr.io/${{ github.repository }}:${version}
+
+  clone_and_bump:
+    runs-on: ubuntu-latest
+    needs:
+      - push_image
+      - semantic_release
+    env:
+      ENVIRONMENT: ${{ github.ref_name == 'main' && 'production' || 'dev' && 'staging' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Clone another repository
+        uses: actions/checkout@v3
+        with:
+          repository: simplifyops/cicd-gitops-test
+          token: ${{ secrets.TOKEN }}
+          path: other-repo
+          ref: refs/heads/main
+
+      - name: Install yq
+        run: |
+          sudo wget https://github.com/mikefarah/yq/releases/download/v4.6.0/yq_linux_amd64 -O /usr/bin/yq
+          sudo chmod +x /usr/bin/yq
+
+      - name: Bump version in YAML file
+        run: |
+          export version=${{ needs.semantic_release.outputs.release_version }}
+          yq e -i '.tag = strenv(version)' other-repo/values-$ENVIRONMENT.yaml
+
+      - name: Commit and push changes
+        run: |
+          cd other-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add values-$ENVIRONMENT.yaml
+          git commit -m "chore: bump version to $version for $ENVIRONMENT"
+          git push
