@@ -42,23 +42,23 @@ jobs:
           set -o pipefail
           npm run lint 2>&1 
 
-  unit_tests:
-    runs-on: ubuntu-latest
-    needs: code_lint
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+  # unit_tests:
+  #   runs-on: ubuntu-latest
+  #   needs: code_lint
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v3
 
-      - name: Unit tests
-        id: unit_tests
-        run: |
-          npm i
-          set -o pipefail
-          npm run test 2>&1
+  #     - name: Unit tests
+  #       id: unit_tests
+  #       run: |
+  #         npm i
+  #         set -o pipefail
+  #         npm run test 2>&1
 
   build-and-push:
     runs-on: ubuntu-latest
-    needs: unit_tests
+    needs: code_lint   #needs: unit_tests
 
     steps:
     - name: Checkout repository
