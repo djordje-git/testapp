@@ -72,7 +72,7 @@ jobs:
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
-        password: ${{ secrets.TOKEN }} #moram da napravim u Github Actions secret i dam mu path do Tokena. Prvo napravim Token na Githubu
+        password: ${{ secrets.TOKEN }} #Prvo generisem token (repo write packages) Token na Githubu. Moram da napravim u Github Actions New repository secret i tu ubacim vrednost iz Tokena.
 
     - name: Build and push Docker image
       uses: docker/build-push-action@v4
