@@ -21,3 +21,9 @@ USER appuser
 EXPOSE 11000
 CMD ["node", "dist/main"]
 
+## Build the Docker Image:
+# Open your terminal, navigate to the root directory of your project, and run the following command:
+# docker build -t hello-goldbach-app .
+
+## you can run the Docker container using the following command:
+# docker run -d -p 11000:11000 hello-goldbach-app
